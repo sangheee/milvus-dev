@@ -8,8 +8,7 @@ import (
 )
 
 func TestTokenizer(t *testing.T) {
-	// default tokenizer.
-	{
+	t.Run("default tokenizer", func(t *testing.T) {
 		m := "{\"tokenizer\": \"standard\"}"
 		tokenizer, err := NewTokenizer(m)
 		assert.NoError(t, err)
@@ -20,10 +19,9 @@ func TestTokenizer(t *testing.T) {
 		for tokenStream.Advance() {
 			fmt.Println(tokenStream.Token())
 		}
-	}
+	})
 
-	// jieba tokenizer.
-	{
+	t.Run("jieba tokenizer", func(t *testing.T) {
 		m := "{\"tokenizer\": \"jieba\"}"
 		tokenizer, err := NewTokenizer(m)
 		assert.NoError(t, err)
@@ -34,7 +32,19 @@ func TestTokenizer(t *testing.T) {
 		for tokenStream.Advance() {
 			fmt.Println(tokenStream.Token())
 		}
-	}
+	})
+	t.Run("grpc tokenizer", func(t *testing.T) {
+		m := "{\"tokenizer\": \"grpc\"}"
+		tokenizer, err := NewTokenizer(m)
+		assert.NoError(t, err)
+		defer tokenizer.Destroy()
+
+		tokenStream := tokenizer.NewTokenStream("football, basketball, pingpang")
+		defer tokenStream.Destroy()
+		for tokenStream.Advance() {
+			fmt.Println(tokenStream.Token())
+		}
+	})
 }
 
 func TestValidateTokenizer(t *testing.T) {

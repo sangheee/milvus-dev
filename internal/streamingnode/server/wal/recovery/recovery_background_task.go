@@ -77,7 +77,7 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, snapsho
 			logger.Warn("failed to persist dirty snapshot", zap.Error(err))
 			return
 		}
-		logger.Log(lvl, "persist dirty snapshot")
+		//logger.Log(lvl, "persist dirty snapshot")
 		defer rs.metrics.ObserveIsOnPersisting(false)
 	}()
 

@@ -103,7 +103,7 @@ func (t *samplingTruncator) consumeCheckpointSamples() *WALCheckpoint {
 func (t *samplingTruncator) applyTruncate() {
 	truncateCheckpoint := t.consumeCheckpointSamples()
 	if truncateCheckpoint == nil {
-		t.Logger().Debug("no checkpoint sample can be used to truncate wal")
+		//t.Logger().Debug("no checkpoint sample can be used to truncate wal")
 		return
 	}
 	logger := t.Logger().With(zap.String("messageID", truncateCheckpoint.MessageID.String()), zap.Uint64("timeTick", truncateCheckpoint.TimeTick))

@@ -115,10 +115,10 @@ type ClientBase[T interface {
 	role          string
 	isNode        bool // pre-calculated is node flag
 
-	ClientMaxSendSize      int
-	ClientMaxRecvSize      int
-	CompressionEnabled     bool
-	RetryServiceNameConfig string
+	ClientMaxSendSize  int
+	ClientMaxRecvSize  int
+	CompressionEnabled bool
+	//RetryServiceNameConfig string
 
 	DialTimeout      time.Duration
 	KeepAliveTime    time.Duration
@@ -147,12 +147,12 @@ func NewClientBase[T interface {
 }](config *paramtable.GrpcClientConfig, serviceName string,
 ) *ClientBase[T] {
 	return &ClientBase[T]{
-		ClientMaxRecvSize:       config.ClientMaxRecvSize.GetAsInt(),
-		ClientMaxSendSize:       config.ClientMaxSendSize.GetAsInt(),
-		DialTimeout:             config.DialTimeout.GetAsDuration(time.Millisecond),
-		KeepAliveTime:           config.KeepAliveTime.GetAsDuration(time.Millisecond),
-		KeepAliveTimeout:        config.KeepAliveTimeout.GetAsDuration(time.Millisecond),
-		RetryServiceNameConfig:  serviceName,
+		ClientMaxRecvSize: config.ClientMaxRecvSize.GetAsInt(),
+		ClientMaxSendSize: config.ClientMaxSendSize.GetAsInt(),
+		DialTimeout:       config.DialTimeout.GetAsDuration(time.Millisecond),
+		KeepAliveTime:     config.KeepAliveTime.GetAsDuration(time.Millisecond),
+		KeepAliveTimeout:  config.KeepAliveTimeout.GetAsDuration(time.Millisecond),
+		//RetryServiceNameConfig:  serviceName,
 		MaxAttempts:             config.MaxAttempts.GetAsInt(),
 		InitialBackoff:          config.InitialBackoff.GetAsFloat(),
 		MaxBackoff:              config.MaxBackoff.GetAsFloat(),

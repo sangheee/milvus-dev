@@ -63,16 +63,20 @@ case "${unameOut}" in
         echo "valid llvm(>=14) not installed"
         exit 1
       fi
-      llvm_prefix="$(brew --prefix llvm@${llvm_version})"
+      llvm_prefix="$(brew --prefix llvm@17)"
       export CLANG_TOOLS_PATH="${llvm_prefix}/bin"
       export CC="ccache ${llvm_prefix}/bin/clang"
       export CXX="ccache ${llvm_prefix}/bin/clang++"
       export ASM="${llvm_prefix}/bin/clang"
-      export CFLAGS="-Wno-deprecated-declarations -I$(brew --prefix libomp)/include"
+      export CFLAGS="-Wno-deprecated-declarations -I$(brew --prefix libomp)/include -I${llvm_prefix}/include"
       export CXXFLAGS=${CFLAGS}
-      export LDFLAGS="-L$(brew --prefix libomp)/lib"
+      export CPPFLAGS=${CFLAGS}
+      export LDFLAGS="-L$(brew --prefix libomp)/lib -L${llvm_prefix}/lib"
+      export CMAKE_POLICY_VERSION_MINIMUM=3.5
+      export ENABLE_AZURE=false
 
       export PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:$ROOT_DIR/internal/core/output/lib/pkgconfig"
+      export LIBRARY_PATH="$LIBRARY_PATH:/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib:/Library/Developer/CommandLineTools/SDKs/MacOSX14.5.sdk/usr/lib"
       export DYLD_LIBRARY_PATH=$ROOT_DIR/internal/core/output/lib
       export RPATH=$DYLD_LIBRARY_PATH;;
     MINGW*)
