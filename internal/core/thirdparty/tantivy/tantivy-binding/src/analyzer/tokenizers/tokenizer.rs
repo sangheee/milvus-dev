@@ -5,7 +5,7 @@ use lindera::mode::Mode;
 use serde_json as json;
 use log::warn;
 
-use super::{IcuTokenizer, JiebaTokenizer, LangIdentTokenizer, LinderaTokenizer};
+use super::{GrpcTokenizer, IcuTokenizer, JiebaTokenizer, LangIdentTokenizer, LinderaTokenizer};
 use crate::error::{Result, TantivyBindingError};
 
 pub fn standard_builder() -> TextAnalyzerBuilder {
@@ -53,6 +53,18 @@ pub fn lindera_builder(params: Option<&json::Map<String, json::Value>>) -> Resul
     Ok(TextAnalyzer::builder(tokenizer).dynamic())
 }
 
+pub fn grpc_builder(
+    params: Option<&json::Map<String, json::Value>>,
+) -> Result<TextAnalyzerBuilder> {
+    if params.is_none() {
+        return Err(TantivyBindingError::InvalidArgument(format!(
+            "grpc tokenizer must be costum"
+        )));
+    }
+    let tokenizer = GrpcTokenizer::from_json(params.unwrap())?;
+    Ok(TextAnalyzer::builder(tokenizer).dynamic())
+}
+
 pub fn get_builder_with_tokenizer(
     params: &json::Value,
     fc: fn(&json::Map<String, json::Value>) -> Result<TextAnalyzer>,
@@ -89,6 +101,7 @@ pub fn get_builder_with_tokenizer(
         "lindera" => lindera_builder(params_map),
         "icu" => Ok(icu_builder()),
         "language_identifier" => lang_ident_builder(params_map, fc),
+        "grpc" => grpc_builder(params_map),
         other => {
             warn!("unsupported tokenizer: {}", other);
             Err(TantivyBindingError::InvalidArgument(format!(
