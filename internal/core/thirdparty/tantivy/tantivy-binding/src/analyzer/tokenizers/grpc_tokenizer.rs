@@ -1,5 +1,7 @@
 use std::vec::Vec;
 use serde_json as json;
+use once_cell::sync::Lazy;
+use tokio::runtime::{Runtime};
 use tantivy::tokenizer::{Token, Tokenizer, TokenStream};
 use crate::error::TantivyBindingError;
 
@@ -10,8 +12,6 @@ pub mod tokenizer {
 use tokenizer::tokenizer_client::TokenizerClient;
 use tokenizer::tokenization_request::Parameter;
 use tokenizer::TokenizationRequest;
-use once_cell::sync::Lazy;
-use tokio::runtime::Runtime;
 
 static TOKIO_RT: Lazy<Runtime> = Lazy::new(|| {
     Runtime::new().expect("Failed to create Tokio runtime")
@@ -140,29 +140,28 @@ impl GrpcTokenizer {
         // gRPC client works asynchronously using the Tokio runtime.
         // It requires the Tokio runtime to create a gRPC client and send requests.
         // Use the Tokio runtime to send gRPC requests asynchronously and wait for responses.
-        let response = TOKIO_RT.block_on(async {
-            let mut client = match TokenizerClient::connect(self.endpoint.clone()).await {
-                Ok(client) => client,
-                Err(e) => {
-                    eprintln!("gRPC tokenizer connect error: {}", e);
-                    return None;
+        let ori_tokens = tokio::task::block_in_place(|| {
+            match TOKIO_RT.block_on(async {
+                let mut client = match TokenizerClient::connect(self.endpoint.clone()).await {
+                    Ok(client) => client,
+                    Err(e) => {
+                        eprintln!("gRPC tokenizer connect error: {}", e);
+                        return None;
+                    }
+                };
+                match client.tokenize(request).await {
+                    Ok(resp) => Some(resp),
+                    Err(e) => {
+                        eprintln!("gRPC tokenizer request error: {}", e);
+                        None
+                    }
                 }
-            };
-            match client.tokenize(request).await {
-                Ok(resp) => Some(resp),
-                Err(e) => {
-                    eprintln!("gRPC tokenizer request error: {}", e);
-                    None
-                }
+            }) {
+                Some(resp) => resp.into_inner().tokens,
+                None => vec![],
             }
         });
 
-        let response = match response {
-            Some(resp) => resp,
-            None => return vec![],
-        };
-
-        let ori_tokens = response.into_inner().tokens;
         let mut tokens = Vec::with_capacity(ori_tokens.len());
 
         for token in ori_tokens {
@@ -226,14 +225,24 @@ mod tests {
 
     #[test]
     fn test_grpc_tokenizer_token_stream() {
+        println!("Running gRPC tokenizer test...");
+
         let params = json!({
             "endpoint": "http://localhost:50051",
             "parameters": [
                 {
-                    "key": "lang",
-                    "values": ["en"]
+                  "key": "method",
+                  "values": [
+                    "hanaterm"
+                  ]
+                },
+                {
+                  "key": "options",
+                  "values": [
+                    "sgmt +syno +korea"
+                  ]
                 }
-            ]
+              ]
         });
 
         let map = params.as_object().unwrap();
