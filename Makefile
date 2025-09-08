@@ -399,7 +399,7 @@ clean:
 	@rm -rf bin/
 	@rm -rf lib/
 	@rm -rf $(GOPATH)/bin/milvus
-	@rm -rf cmake_build
+	@#rm -rf cmake_build
 	@rm -rf internal/core/output
 
 milvus-tools: print-build-info

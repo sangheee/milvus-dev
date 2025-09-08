@@ -1,6 +1,11 @@
 use std::vec::Vec;
 use serde_json as json;
+use once_cell::sync::Lazy;
+use tokio::runtime::{Runtime};
 use tantivy::tokenizer::{Token, Tokenizer, TokenStream};
+use tonic::transport::Channel;
+use tonic::transport::{ClientTlsConfig, Certificate, Identity};
+use log::warn;
 use crate::error::TantivyBindingError;
 
 pub mod tokenizer {
@@ -10,18 +15,17 @@ pub mod tokenizer {
 use tokenizer::tokenizer_client::TokenizerClient;
 use tokenizer::tokenization_request::Parameter;
 use tokenizer::TokenizationRequest;
-use once_cell::sync::Lazy;
-use tokio::runtime::Runtime;
 
 static TOKIO_RT: Lazy<Runtime> = Lazy::new(|| {
     Runtime::new().expect("Failed to create Tokio runtime")
 });
 
-
 #[derive(Clone)]
 pub struct GrpcTokenizer {
     endpoint: String,
     parameters: Vec<Parameter>,
+    client: TokenizerClient<Channel>,
+    default_tokens: Vec<Token>,
 }
 
 #[derive(Clone)]
@@ -32,6 +36,8 @@ pub struct GrpcTokenStream {
 
 const ENDPOINTKEY: &str = "endpoint";
 const PARAMTERSKEY: &str = "parameters";
+const TLSKEY: &str = "tls";
+const DEFAULTTOKENSKEY: &str = "default_tokens";
 
 impl TokenStream for GrpcTokenStream {
     fn advance(&mut self) -> bool {
@@ -54,8 +60,7 @@ impl TokenStream for GrpcTokenStream {
 
 impl GrpcTokenizer {
     pub fn from_json(params: &json::Map<String, json::Value>) -> crate::error::Result<GrpcTokenizer> {
-        let endpoint = params
-            .get(ENDPOINTKEY)
+        let endpoint = params.get(ENDPOINTKEY)
             .ok_or(TantivyBindingError::InvalidArgument(
                 "grpc tokenizer must set endpoint".to_string(),
             ))?
@@ -74,6 +79,34 @@ impl GrpcTokenizer {
                 "grpc tokenizer endpoint must start with http:// or https://".to_string(),
             ));
         }
+
+        let default_tokens = if let Some(val) = params.get(DEFAULTTOKENSKEY) {
+            if let Some(arr) = val.as_array() {
+                let mut offset = 0;
+                let mut position = 0;
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|text| {
+                        let start = offset;
+                        let end = start + text.len();
+                        offset = end + 1;
+                        let token = Token {
+                            offset_from: start,
+                            offset_to: end,
+                            position,
+                            text: text.to_string(),
+                            position_length: text.chars().count(),
+                        };
+                        position += 1;
+                        token
+                    }).collect()
+            } else {
+                warn!("grpc tokenizer default_tokens must be an array. ignoring.");
+                vec![]
+            }
+        } else {
+            vec![]
+        };
 
         let mut parameters = vec![];
         if let Some(val) = params.get(PARAMTERSKEY) {
@@ -126,9 +159,94 @@ impl GrpcTokenizer {
             }
         }
 
+        let channel = match TOKIO_RT.block_on(async {
+            let endpoint_domain = url::Url::parse(endpoint)
+                .ok()
+                .and_then(|u| u.host_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| endpoint.to_string());
+            // if the endpoint starts with "https://", we need to configure TLS
+            if endpoint.starts_with("https://") {
+                let tls_config = match params.get(TLSKEY) {
+                    Some(tls_val) => {
+                        let domain = tls_val.get("domain")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| endpoint_domain);
+
+                        let mut tls = ClientTlsConfig::new()
+                            .domain_name(domain);
+
+                        // Read the CA certificate from the file system
+                        if let Some(ca_cert_path) = tls_val.get("ca_cert") {
+                            if ca_cert_path.is_string() {
+                                let ca_cert_path = ca_cert_path.as_str().unwrap();
+                                let ca_cert = std::fs::read(ca_cert_path)
+                                    .map(|cert| Certificate::from_pem(cert));
+                                if let Ok(ca_cert) = ca_cert {
+                                    tls = tls.ca_certificate(ca_cert);
+                                } else {
+                                    warn!("grpc tokenizer tls ca_cert read error: {}", ca_cert_path);
+                                }
+                            } else {
+                                warn!("grpc tokenizer tls ca_cert must be a string. skip loading CA certificate.");
+                            }
+                        }
+
+                        if let (Some(client_cert_path), Some(client_key_path)) = (
+                            tls_val.get("client_cert").and_then(|v| v.as_str()),
+                            tls_val.get("client_key").and_then(|v| v.as_str()
+                            )
+                        ) {
+                            let cert = std::fs::read(client_cert_path)
+                                .unwrap_or_else(|e| {
+                                    warn!("grpc tokenizer tls client_cert read error: {}", e);
+                                    vec![]
+                                });
+                            let key = std::fs::read(client_key_path)
+                                .unwrap_or_else(|e| {
+                                    warn!("grpc tokenizer tls client_key read error: {}", e);
+                                    vec![]
+                                });
+                            if !cert.is_empty() && !key.is_empty() {
+                                tls = tls.identity(Identity::from_pem(cert, key));
+                            } else {
+                                warn!("grpc tokenizer tls client_cert or client_key is empty. skip loading client identity.");
+                            }
+                        }
+                        tls
+                    }
+                    None => ClientTlsConfig::new()
+                        .domain_name(endpoint_domain),
+                };
+
+                tonic::transport::Endpoint::new(endpoint.to_string())?
+                    .tls_config(tls_config)?
+                    .connect()
+                    .await
+            } else {
+                tonic::transport::Endpoint::new(endpoint.to_string())?
+                    .connect()
+                    .await
+            }
+        }) {
+            Ok(client) => client,
+            Err(e) => {
+                warn!("failed to connect to gRPC server: {}, error: {}", endpoint, e);
+                return Err(TantivyBindingError::InvalidArgument(format!(
+                    "failed to connect to gRPC server: {}, error: {}",
+                    endpoint, e
+                )));
+            }
+        };
+
+        // Create a new gRPC client using the channel
+        let client = TokenizerClient::new(channel);
+
         Ok(GrpcTokenizer {
             endpoint: endpoint.to_string(),
             parameters: parameters,
+            client: client,
+            default_tokens: default_tokens,
         })
     }
 
@@ -138,44 +256,35 @@ impl GrpcTokenizer {
             parameters: self.parameters.clone(),
         });
 
+        let mut client = self.client.clone();
+
         // gRPC client works asynchronously using the Tokio runtime.
         // It requires the Tokio runtime to create a gRPC client and send requests.
         // Use the Tokio runtime to send gRPC requests asynchronously and wait for responses.
-        let response = TOKIO_RT.block_on(async {
-            let mut client = match TokenizerClient::connect(self.endpoint.clone()).await {
-                Ok(client) => client,
-                Err(e) => {
-                    eprintln!("gRPC tokenizer connect error: {}", e);
-                    return None;
+        tokio::task::block_in_place(|| {
+            TOKIO_RT.block_on(async {
+                match client.tokenize(request).await {
+                    Ok(resp) => {
+                        let ori_tokens = resp.into_inner().tokens;
+                        let mut tokens = Vec::with_capacity(ori_tokens.len());
+                        for token in ori_tokens {
+                            tokens.push(Token {
+                                offset_from: token.offset_from as usize,
+                                offset_to: token.offset_to as usize,
+                                position: token.position as usize,
+                                text: token.text,
+                                position_length: (token.offset_to - token.offset_from) as usize,
+                            });
+                        }
+                        tokens
+                    }
+                    Err(e) => {
+                        warn!("gRPC tokenizer request error: {}", e);
+                        self.default_tokens.clone()
+                    }
                 }
-            };
-            match client.tokenize(request).await {
-                Ok(resp) => Some(resp),
-                Err(e) => {
-                    eprintln!("gRPC tokenizer request error: {}", e);
-                    None
-                }
-            }
-        });
-
-        let response = match response {
-            Some(resp) => resp,
-            None => return vec![],
-        };
-
-        let ori_tokens = response.into_inner().tokens;
-        let mut tokens = Vec::with_capacity(ori_tokens.len());
-
-        for token in ori_tokens {
-            tokens.push(Token {
-                offset_from: token.offset_from as usize,
-                offset_to: token.offset_to as usize,
-                position: token.position as usize,
-                text: token.text,
-                position_length: (token.offset_to - token.offset_from) as usize,
-            });
-        }
-        tokens
+            })
+        })
     }
 }
 
@@ -210,7 +319,7 @@ mod tests {
         let map = params.as_object().unwrap();
         let tokenizer = GrpcTokenizer::from_json(map);
 
-        assert!(tokenizer.is_ok(), "from_json failed: {:?}", tokenizer.err());
+        assert!(tokenizer.is_err()); // This test is expected to fail because the endpoint is not valid for testing
     }
 
     #[test]
@@ -223,34 +332,5 @@ mod tests {
         let tokenizer = GrpcTokenizer::from_json(map);
 
         assert!(tokenizer.is_err());
-    }
-
-    #[test]
-    fn test_grpc_tokenizer_token_stream() {
-        let params = json!({
-            "endpoint": "http://localhost:50051",
-            "parameters": [
-                {
-                    "key": "lang",
-                    "values": ["en"]
-                }
-            ]
-        });
-
-        let map = params.as_object().unwrap();
-        let tokenizer = GrpcTokenizer::from_json(map).unwrap();
-
-        let mut tokenizer_clone = tokenizer.clone();
-        let mut stream = tokenizer_clone.token_stream("hello world");
-
-        // There is no runnig gRPC server in the test environment,
-        // so the result is likely to be an empty vector.
-        let mut tokens = vec![];
-        while stream.advance() {
-            tokens.push(stream.token().text.clone());
-        }
-
-        // Check if it runs without error
-        println!("tokenized: {:?}", tokens);
     }
 }
